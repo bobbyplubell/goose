@@ -40,12 +40,18 @@ pub async fn inject_moim(
 
         if has_unexpected_issues {
             tracing::warn!("MOIM injection caused unexpected issues: {:?}", issues);
-            return conversation;
+            // Skip MOIM injection but still clean up orphaned tool pairs etc.
+            // so the provider never receives a structurally invalid conversation.
+            let (fixed_original, _) = fix_conversation(conversation);
+            return fixed_original;
         }
 
         return fixed;
     }
-    conversation
+
+    // No MOIM message — still sanitize so the provider never sees orphaned tool pairs.
+    let (fixed, _) = fix_conversation(conversation);
+    fixed
 }
 
 #[cfg(test)]

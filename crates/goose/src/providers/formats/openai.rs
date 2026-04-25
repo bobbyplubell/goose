@@ -962,19 +962,33 @@ where
                         msg = msg.with_id(id);
                     }
 
+                    let is_done = chunk.choices[0].finish_reason.is_some();
                     yield (
                         Some(msg),
-                        if chunk.choices[0].finish_reason.is_some() {
-                            usage
-                        } else {
-                            None
-                        },
-                    )
-                } else if usage.is_some() {
-                    yield (None, usage)
+                        if is_done { usage } else { None },
+                    );
+                    if is_done {
+                        break 'outer;
+                    }
+                } else {
+                    // Empty content chunk — may still carry finish_reason and/or usage.
+                    let is_done = chunk.choices[0].finish_reason.is_some();
+                    if usage.is_some() {
+                        yield (None, usage);
+                    }
+                    if is_done {
+                        break 'outer;
+                    }
                 }
             } else if usage.is_some() {
                 yield (None, usage)
+            }
+
+            // Fallback: if the chunk carries finish_reason but no content/tool-calls
+            // matched a branch above (e.g. thinking-budget exhausted mid-reasoning),
+            // none of the branches would have broken the loop, so we do it here.
+            if !chunk.choices.is_empty() && chunk.choices[0].finish_reason.is_some() {
+                break 'outer;
             }
         }
     }

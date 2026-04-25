@@ -1735,49 +1735,69 @@ impl Agent {
                 }
 
                 if no_tools_called {
-                    // Lock, extract state, drop guard before branching — handle_retry_logic
-                    // also locks final_output_tool and tokio::sync::Mutex is not reentrant.
-                    let final_output = {
-                        let guard = self.final_output_tool.lock().await;
-                        guard.as_ref().map(|fot| fot.final_output.clone())
-                    };
+                    // If the model produced only thinking with no text and no tool calls it
+                    // exhausted its reasoning budget before answering. Prompt it to respond.
+                    let has_thinking_without_response = last_assistant_text.is_empty()
+                        && messages_to_add.messages().iter().any(|m| {
+                            m.content.iter().any(|c| {
+                                matches!(
+                                    c,
+                                    MessageContent::Thinking(_) | MessageContent::RedactedThinking(_)
+                                )
+                            })
+                        });
 
-                    match final_output {
-                        Some(None) => {
-                            warn!("Final output tool has not been called yet. Continuing agent loop.");
-                            let message = Message::user().with_text(FINAL_OUTPUT_CONTINUATION_MESSAGE);
-                            messages_to_add.push(message.clone());
-                            yield AgentEvent::Message(message);
-                        }
-                        Some(Some(output)) => {
-                            let message = Message::assistant().with_text(output);
-                            messages_to_add.push(message.clone());
-                            yield AgentEvent::Message(message);
-                            exit_chat = true;
-                        }
-                        None if did_recovery_compact_this_iteration => {
-                            // continue from last user message after recovery compact
-                        }
-                        None => {
-                            match self.handle_retry_logic(&mut conversation, &session_config, &initial_messages).await {
-                                Ok(should_retry) => {
-                                    if should_retry {
-                                        info!("Retry logic triggered, restarting agent loop");
-                                        messages_to_add = Conversation::default();
-                                        session_manager.replace_conversation(&session_config.id, &conversation).await?;
-                                        yield AgentEvent::HistoryReplaced(conversation.clone());
-                                    } else {
+                    if has_thinking_without_response {
+                        let message = Message::user()
+                            .with_text("Your thinking budget was reached. Please provide your response now.");
+                        messages_to_add.push(message.clone());
+                        yield AgentEvent::Message(message);
+                        // Don't exit — outer loop retries with this continuation prompt.
+                    } else {
+                        // Lock, extract state, drop guard before branching — handle_retry_logic
+                        // also locks final_output_tool and tokio::sync::Mutex is not reentrant.
+                        let final_output = {
+                            let guard = self.final_output_tool.lock().await;
+                            guard.as_ref().map(|fot| fot.final_output.clone())
+                        };
+
+                        match final_output {
+                            Some(None) => {
+                                warn!("Final output tool has not been called yet. Continuing agent loop.");
+                                let message = Message::user().with_text(FINAL_OUTPUT_CONTINUATION_MESSAGE);
+                                messages_to_add.push(message.clone());
+                                yield AgentEvent::Message(message);
+                            }
+                            Some(Some(output)) => {
+                                let message = Message::assistant().with_text(output);
+                                messages_to_add.push(message.clone());
+                                yield AgentEvent::Message(message);
+                                exit_chat = true;
+                            }
+                            None if did_recovery_compact_this_iteration => {
+                                // continue from last user message after recovery compact
+                            }
+                            None => {
+                                match self.handle_retry_logic(&mut conversation, &session_config, &initial_messages).await {
+                                    Ok(should_retry) => {
+                                        if should_retry {
+                                            info!("Retry logic triggered, restarting agent loop");
+                                            messages_to_add = Conversation::default();
+                                            session_manager.replace_conversation(&session_config.id, &conversation).await?;
+                                            yield AgentEvent::HistoryReplaced(conversation.clone());
+                                        } else {
+                                            exit_chat = true;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Retry logic failed: {}", e);
+                                        yield AgentEvent::Message(
+                                            Message::assistant().with_text(
+                                                format!("Retry logic encountered an error: {}", e)
+                                            )
+                                        );
                                         exit_chat = true;
                                     }
-                                }
-                                Err(e) => {
-                                    error!("Retry logic failed: {}", e);
-                                    yield AgentEvent::Message(
-                                        Message::assistant().with_text(
-                                            format!("Retry logic encountered an error: {}", e)
-                                        )
-                                    );
-                                    exit_chat = true;
                                 }
                             }
                         }

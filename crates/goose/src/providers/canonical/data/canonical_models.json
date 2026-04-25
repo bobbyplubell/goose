@@ -88508,12 +88508,14 @@
     "reasoning": true,
     "tool_call": true,
     "temperature": true,
-    "release_date": "2026-04-20",
-    "last_updated": "2026-04-20",
+    "knowledge": "2025-01",
+    "release_date": "2026-04-24",
+    "last_updated": "2026-04-24",
     "modalities": {
       "input": [
         "text",
-        "image"
+        "image",
+        "video"
       ],
       "output": [
         "text"
@@ -88521,13 +88523,13 @@
     },
     "open_weights": true,
     "cost": {
-      "input": 0.95,
-      "output": 4.0,
-      "cache_read": 0.16
+      "input": 0.6,
+      "output": 3.0,
+      "cache_read": 0.1
     },
     "limit": {
       "context": 262144,
-      "output": 262144
+      "output": 32768
     }
   },
   {

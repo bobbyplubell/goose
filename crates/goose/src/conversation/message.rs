@@ -329,7 +329,16 @@ impl MessageContent {
                     metadata: res.metadata.clone(),
                 }))
             }
-            MessageContent::Thinking(_) | MessageContent::RedactedThinking(_) => None,
+            MessageContent::Thinking(_) | MessageContent::RedactedThinking(_) => {
+                // Providers (Role::Assistant audience) require thinking/reasoning content to be
+                // passed back verbatim in multi-turn conversations (e.g. DeepSeek, Kimi, Anthropic).
+                // Only hide from user-facing displays.
+                if audience == Role::Assistant {
+                    Some(self.clone())
+                } else {
+                    None
+                }
+            }
             _ => Some(self.clone()),
         }
     }
@@ -1634,5 +1643,51 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_thinking_preserved_for_assistant_audience() {
+        // Providers like DeepSeek and Kimi require reasoning_content to be passed back
+        // in multi-turn conversations. Thinking must survive filter_for_audience(Assistant).
+        let thinking = MessageContent::thinking("some reasoning", "sig123");
+        assert!(
+            thinking.filter_for_audience(Role::Assistant).is_some(),
+            "Thinking must be visible to provider (Role::Assistant)"
+        );
+        assert!(
+            thinking.filter_for_audience(Role::User).is_none(),
+            "Thinking must be hidden from user display"
+        );
+    }
+
+    #[test]
+    fn test_redacted_thinking_preserved_for_assistant_audience() {
+        let redacted = MessageContent::redacted_thinking("opaque-token");
+        assert!(
+            redacted.filter_for_audience(Role::Assistant).is_some(),
+            "RedactedThinking must be visible to provider (Role::Assistant)"
+        );
+        assert!(
+            redacted.filter_for_audience(Role::User).is_none(),
+            "RedactedThinking must be hidden from user display"
+        );
+    }
+
+    #[test]
+    fn test_agent_visible_content_preserves_thinking() {
+        let mut message = Message::assistant();
+        message
+            .content
+            .push(MessageContent::thinking("reasoning text", "sig"));
+        message
+            .content
+            .push(MessageContent::text("final answer"));
+
+        let visible = message.agent_visible_content();
+        assert_eq!(visible.content.len(), 2, "Both thinking and text must be present");
+        assert!(
+            visible.content.iter().any(|c| matches!(c, MessageContent::Thinking(_))),
+            "Thinking content must survive agent_visible_content()"
+        );
     }
 }
