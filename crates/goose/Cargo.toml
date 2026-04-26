@@ -226,6 +226,7 @@ goose-test-support = { path = "../goose-test-support" }
 bytes.workspace = true
 http.workspace = true
 goose-mcp = { path = "../goose-mcp" }
+proptest = "1"
 
 [[example]]
 name = "agent"
