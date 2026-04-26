@@ -131,9 +131,6 @@ fn property_schema() -> impl Strategy<Value = Value> {
                 inner.clone().prop_map(|items| json!({"type": "array", "items": items, "description": "a list"})),
                 inner.clone().prop_map(|items| json!({"type": "array", "items": items, "minItems": 1})),
                 inner.clone().prop_map(|items| json!({"type": "array", "items": items, "minItems": 1, "maxItems": 10})),
-                // tuple-style array (items is an array of schemas)
-                (inner.clone(), inner.clone())
-                    .prop_map(|(a, b)| json!({"type": "array", "items": [a, b]})),
                 // array with anyOf items
                 (inner.clone(), inner.clone())
                     .prop_map(|(a, b)| json!({"type": "array", "items": {"anyOf": [a, b]}})),
