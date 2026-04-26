@@ -299,11 +299,8 @@ proptest! {
         // siblings (description, title) should remain at the property level
         for (key, val) in prop_schema.as_object().unwrap() {
             if key != "$ref" {
-                prop_assert_eq!(
-                    field.get(key.as_str()),
-                    Some(val),
-                    "sibling key `{key}` was lost during $ref wrapping: {field}"
-                );
+                let msg = format!("sibling key `{key}` was lost during $ref wrapping: {field}");
+                prop_assert_eq!(field.get(key.as_str()), Some(val), "{}", msg);
             }
         }
     }
