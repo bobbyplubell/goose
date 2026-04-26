@@ -699,6 +699,23 @@ fn ensure_valid_json_schema(schema: &mut Value) {
             return;
         }
 
+        // Schemas using anyOf/oneOf/allOf as their type discriminant must not have object
+        // defaults (type/properties/required) injected — those would conflict with the
+        // union branches (e.g. anyOf: [string, array]) and trigger a 400 from strict
+        // providers like Kimi.  Recurse into each branch instead.
+        for kw in &["anyOf", "oneOf", "allOf"] {
+            if let Some(branches) = params_obj.get_mut(*kw) {
+                if let Some(arr) = branches.as_array_mut() {
+                    for branch in arr.iter_mut() {
+                        if branch.is_object() {
+                            ensure_valid_json_schema(branch);
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
         // Check if this is meant to be an object type schema
         let is_object_type = params_obj
             .get("type")
@@ -1182,6 +1199,37 @@ mod tests {
         assert!(data_prop.get("$ref").is_none(), "bare $ref should be removed");
         assert!(data_prop.get("description").is_some(), "description should be preserved");
         assert_eq!(data_prop["allOf"][0]["$ref"], "#/definitions/DataType", "$ref moved into allOf");
+
+        // Test case 5: Property with anyOf + description (e.g. IDA MCP tools).
+        // Must NOT get type/properties/required injected — that would conflict with the
+        // union branches and cause a 400 from strict providers like Kimi.
+        let mut tools = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "lookup_funcs",
+                "description": "Get functions by address or name",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "queries": {
+                            "anyOf": [
+                                {"type": "array", "items": {"type": "string"}},
+                                {"type": "string"}
+                            ],
+                            "description": "Address(es) or name(s)"
+                        }
+                    },
+                    "required": ["queries"]
+                }
+            }
+        })];
+        validate_tool_schemas(&mut tools);
+        let queries_prop = &tools[0]["function"]["parameters"]["properties"]["queries"];
+        assert!(queries_prop.get("type").is_none(), "anyOf property must not get type injected");
+        assert!(queries_prop.get("properties").is_none(), "anyOf property must not get properties injected");
+        assert!(queries_prop.get("required").is_none(), "anyOf property must not get required injected");
+        assert!(queries_prop.get("anyOf").is_some(), "anyOf must be preserved");
+        assert!(queries_prop.get("description").is_some(), "description must be preserved");
     }
 
     const OPENAI_TOOL_USE_RESPONSE: &str = r#"{
