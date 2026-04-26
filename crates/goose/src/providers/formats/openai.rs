@@ -686,6 +686,19 @@ pub fn validate_tool_schemas(tools: &mut [Value]) {
 /// Ensures that the given JSON value follows the expected JSON Schema structure.
 fn ensure_valid_json_schema(schema: &mut Value) {
     if let Some(params_obj) = schema.as_object_mut() {
+        // Kimi ("moonshot flavored json schema") rejects sibling keywords next to $ref,
+        // e.g. {"$ref": "...", "description": "..."} → 400 "conflicting keywords after $ref expansion".
+        // Fix: move $ref into allOf so siblings like description stay valid at the property level.
+        if params_obj.contains_key("$ref") && params_obj.len() > 1 {
+            let ref_value = params_obj.remove("$ref").unwrap();
+            params_obj.insert("allOf".to_string(), json!([{"$ref": ref_value}]));
+            return;
+        }
+        // A bare $ref with no siblings is fine as-is.
+        if params_obj.contains_key("$ref") {
+            return;
+        }
+
         // Check if this is meant to be an object type schema
         let is_object_type = params_obj
             .get("type")
@@ -703,9 +716,7 @@ fn ensure_valid_json_schema(schema: &mut Value) {
             if let Some(properties) = params_obj.get_mut("properties") {
                 if let Some(properties_obj) = properties.as_object_mut() {
                     for (_key, prop) in properties_obj.iter_mut() {
-                        if prop.is_object()
-                            && prop.get("type").and_then(|t| t.as_str()) == Some("object")
-                        {
+                        if prop.is_object() {
                             ensure_valid_json_schema(prop);
                         }
                     }
@@ -1146,6 +1157,31 @@ mod tests {
         let mut tools = vec![original_schema.clone()];
         validate_tool_schemas(&mut tools);
         assert_eq!(tools[0], original_schema);
+
+        // Test case 4: Property with $ref + description sibling (Kimi rejects this).
+        // $ref should move into allOf so description stays valid at the property level.
+        let mut tools = vec![json!({
+            "type": "function",
+            "function": {
+                "name": "test_func",
+                "description": "test description",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "data": {
+                            "$ref": "#/definitions/DataType",
+                            "description": "some data"
+                        }
+                    },
+                    "required": []
+                }
+            }
+        })];
+        validate_tool_schemas(&mut tools);
+        let data_prop = &tools[0]["function"]["parameters"]["properties"]["data"];
+        assert!(data_prop.get("$ref").is_none(), "bare $ref should be removed");
+        assert!(data_prop.get("description").is_some(), "description should be preserved");
+        assert_eq!(data_prop["allOf"][0]["$ref"], "#/definitions/DataType", "$ref moved into allOf");
     }
 
     const OPENAI_TOOL_USE_RESPONSE: &str = r#"{
