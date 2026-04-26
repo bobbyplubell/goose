@@ -126,6 +126,24 @@ fn property_schema() -> impl Strategy<Value = Value> {
                 // --- not ---
                 inner.clone().prop_map(|a| json!({"not": a})),
 
+                // --- if / then / else (draft-7 conditional schemas) ---
+                (inner.clone(), inner.clone())
+                    .prop_map(|(t, th)| json!({"if": t, "then": th})),
+                (inner.clone(), inner.clone(), inner.clone())
+                    .prop_map(|(t, th, el)| json!({"if": t, "then": th, "else": el})),
+
+                // --- contains (array must have at least one matching item) ---
+                inner.clone().prop_map(|c| json!({"type": "array", "contains": c})),
+
+                // --- propertyNames (schema applied to each key string) ---
+                Just(json!({"type": "object", "propertyNames": {"type": "string", "pattern": "^[a-z_]+$"}})),
+
+                // --- deep nesting: combinator inside combinator ---
+                (inner.clone(), inner.clone(), inner.clone())
+                    .prop_map(|(a, b, c)| json!({"anyOf": [{"oneOf": [a, b]}, c]})),
+                (inner.clone(), inner.clone())
+                    .prop_map(|(a, b)| json!({"allOf": [{"anyOf": [a, {"type": "null"}]}, b]})),
+
                 // --- array variants ---
                 inner.clone().prop_map(|items| json!({"type": "array", "items": items})),
                 inner.clone().prop_map(|items| json!({"type": "array", "items": items, "description": "a list"})),
@@ -198,7 +216,7 @@ fn property_schema() -> impl Strategy<Value = Value> {
     )
 }
 
-/// Wraps a property schema in a complete tool definition.
+/// Wraps a property schema in a complete tool definition (single field).
 fn make_tool(field_schema: Value) -> Value {
     json!({
         "type": "function",
@@ -212,6 +230,44 @@ fn make_tool(field_schema: Value) -> Value {
                 },
                 "required": []
             }
+        }
+    })
+}
+
+/// Tool with multiple properties — tests that sanitization doesn't cross-contaminate fields.
+fn make_multi_field_tool(schemas: Vec<Value>) -> Value {
+    let properties: serde_json::Map<String, Value> = schemas
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| (format!("field{i}"), s))
+        .collect();
+    json!({
+        "type": "function",
+        "function": {
+            "name": "multi_tool",
+            "description": "multiple fields",
+            "parameters": {
+                "type": "object",
+                "properties": Value::Object(properties),
+                "required": []
+            }
+        }
+    })
+}
+
+/// Tool with no parameters at all.
+fn make_no_params_tool() -> Value {
+    json!({"type": "function", "function": {"name": "no_params", "description": "none"}})
+}
+
+/// Tool with empty parameters object.
+fn make_empty_params_tool() -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": "empty_params",
+            "description": "empty",
+            "parameters": {}
         }
     })
 }
@@ -270,6 +326,42 @@ proptest! {
                 field.get("required").is_none(),
                 "combinator property got `required` injected: {field}"
             );
+        }
+    }
+
+    /// Multiple properties in one tool must each be valid independently —
+    /// sanitization of one field must not corrupt another.
+    #[test]
+    fn multi_field_tools_are_valid(
+        s1 in property_schema(),
+        s2 in property_schema(),
+        s3 in property_schema(),
+    ) {
+        let mut tools = vec![make_multi_field_tool(vec![s1, s2, s3])];
+        validate_tool_schemas(&mut tools);
+
+        let parameters = &tools[0]["function"]["parameters"];
+        jsonschema::meta::validate(parameters)
+            .map_err(|e| TestCaseError::fail(format!(
+                "multi-field tool produced invalid schema: {e}\nschema: {parameters}"
+            )))?;
+    }
+
+    /// Tools with no parameters or empty parameters must not panic or corrupt.
+    #[test]
+    fn edge_case_tool_structures_are_stable(_unused in Just(())) {
+        let mut tools = vec![
+            make_no_params_tool(),
+            make_empty_params_tool(),
+        ];
+        // Must not panic
+        validate_tool_schemas(&mut tools);
+        // Empty params gets type/properties/required injected — still must be valid
+        if let Some(params) = tools[1]["function"].get("parameters") {
+            jsonschema::meta::validate(params)
+                .map_err(|e| TestCaseError::fail(format!(
+                    "empty params tool produced invalid schema: {e}"
+                )))?;
         }
     }
 

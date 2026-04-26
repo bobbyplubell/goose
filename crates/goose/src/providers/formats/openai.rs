@@ -679,6 +679,20 @@ pub fn validate_tool_schemas(tools: &mut [Value]) {
                     ensure_valid_json_schema(parameters);
                 }
             }
+            // After sanitization, warn if the schema is still invalid — surfaces
+            // MCP tool schema issues before the provider returns a cryptic 400.
+            if let Some(parameters) = function.get("parameters") {
+                if let Err(e) = jsonschema::meta::validate(parameters) {
+                    let name = function
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("unknown");
+                    tracing::warn!(
+                        "tool `{name}` has an invalid JSON Schema after sanitization \
+                         (provider may reject with 400): {e}"
+                    );
+                }
+            }
         }
     }
 }
